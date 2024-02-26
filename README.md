@@ -10,7 +10,7 @@ I add gymnasium and ZeroMQ support compared with the original repository. All th
 ## Environments setup
 
 You have to install the following softwares and environments for this project, the recommend operating system is Ubuntu.
-- CoppeliaSim 4.2 (https://www.coppeliarobotics.com/)
+- CoppeliaSim 4.6 (https://www.coppeliarobotics.com/)
 - Python 3.6+ (Anaconda is recommended)
 - Gymnasium (https://github.com/Farama-Foundation/Gymnasium)
 - Stable-baselines3 (https://github.com/DLR-RM/stable-baselines3)
@@ -28,5 +28,5 @@ You have to install the following softwares and environments for this project, t
 
 Then we have:
 
-![](pic/cart_pole_demo_1.gif)
+![](pic/example.gif)
 
