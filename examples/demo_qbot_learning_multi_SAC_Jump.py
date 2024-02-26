@@ -55,7 +55,7 @@ if __name__ == "__main__":
     # ---------------- Model
     # Option 1: create a new model
     # print("create a new model")
-    model = SAC(policy='MlpPolicy', env=env, learning_rate=1e-3, verbose=True, train_freq=120, learning_starts=1000, ent_coef='auto_0.3', target_update_interval=120, gradient_steps=-1)
+    model = SAC(policy='MlpPolicy', env=env, learning_rate=1e-3, verbose=True, train_freq=120, learning_starts=1000, ent_coef=0.1, target_update_interval=120, gradient_steps=-1)
 
     # Option 2: load the model from files (note that the loaded model can be learned again)
     # print("load the model from files")
