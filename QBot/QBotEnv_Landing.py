@@ -4,7 +4,6 @@ from gymnasium.utils import seeding
 from gymnasium import spaces, logger
 from scipy.spatial.transform import Rotation as R
 import time
-import datetime
 
 import sys
 from coppeliasim_zmqremoteapi_client import RemoteAPIClient
@@ -20,37 +19,27 @@ def cmp(a,b):
     else:
         return -1
 
-class QBotEnv_Jump(gym.Env):
+class QBotEnv_Landing(gym.Env):
     """Custom Environment that follows gym interface"""
     metadata = {'render.modes': ['human']}
 
     def __init__(self, port=23000):
-        super(QBotEnv_Jump, self).__init__()
-        self.push_force = 0
-        # self.target_pos = [0.0, 1.0, 0.64]
-        theta = random.uniform(-np.pi, np.pi)
-        self.target_pos = [np.sin(theta), np.cos(theta),0.64]
+        super(QBotEnv_Landing, self).__init__()
+        self.target_pos = [0.0, 1.0, 0.64]
         self.target_R = R.from_quat([0, 0, 0, 1])
         self.max_torque = 0.05
         self.port = port
 
-        self.error_last_min = 10000
-        self.error_last_max = 0
-        self.error_last = 1.149
-        self.error_init = 1.149
         self.pos_error_thresh = 0.03
         self.angle_error_thresh = 0.1
         self.v_thresh = 0.002
         self.w_thresh = 0.02
-        self.reduce_thresh = 0.001
-        self.v_last = np.array([0.0,0.0,0.0])
-        self.cm_v_last = np.array([0.0, 0.0, 0.0])
-        self.leave_ground = False
+        self.touch_ground = False
+        self.v_last = np.array([0.0, 0.0, 0.0])
+        self.error_angle_last = 100
 
         self.sim_per_step = 10
 
-        self.time_max = 240
-        self.error_max = 10
         self.target_speed_max = 8 * np.pi
         self.cm_w_max = 2*np.pi
         self.cm_v_max = 1
@@ -58,7 +47,7 @@ class QBotEnv_Jump(gym.Env):
         self.cm_theta_max = 2*np.pi
 
         high = [self.target_speed_max]*3 + [self.cm_w_max]*3 + [self.cm_v_max]*3 \
-        + [self.cm_p_max]*3 + [self.cm_theta_max]*3 + [self.time_max]
+        + [self.cm_p_max]*3 + [self.cm_theta_max]*3
 
         high = np.array(
             high,
@@ -69,41 +58,68 @@ class QBotEnv_Jump(gym.Env):
         self.sim = client.require('sim')
         self.sim.setStepping(True)
 
-        robotBase = self.sim.getObject('/target')
-        self.sim.setObjectPose(robotBase, self.target_pos + [0,0,0,1])
-
         self.action_space = spaces.Box(low=-np.pi, high=np.pi, shape=(3,), dtype=np.float32)
         self.observation_space = spaces.Box(low=-high, high=high, dtype=np.float32)
 
         self.seed()
-        # self.state = self.np_random.uniform(low=-0.05, high=0.05, size=(16,))
-        self.state = np.zeros((16,))
-        self.state[10] = self.target_pos[1]
-        self.counts = 0
-        self.steps_beyond_done = None
-
-        self.sim.startSimulation()
+        self.state = np.zeros((15,))
+        self.setSimInit()
 
         self.qbot_sim_model = QBotSimModel()
         self.qbot_sim_model.initializeSimModel(self.sim)
+
+        self.sim.startSimulation()
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
         return [seed]
 
+    def setSimInit(self):
+        self.state[0] = random.uniform(-self.target_speed_max, self.target_speed_max)
+        self.state[1] = random.uniform(-self.target_speed_max, self.target_speed_max)
+        self.state[2] = random.uniform(-self.target_speed_max, self.target_speed_max)
+        self.state[3] = random.uniform(-0.001,0.001)
+        self.state[4] = 0.006 + random.uniform(-0.001,0.001)
+        self.state[5] = random.uniform(-0.001,0.001)
+        self.state[6] = random.uniform(-0.1, 0.1)
+        self.state[7] = random.uniform(-0.1, 0.1)
+        self.state[8] = random.uniform(-0.1, 0.1)
+        self.state[9] = -0.12
+        self.state[10] = 0.5
+        self.state[11] = -0.36
+        self.state[12] = random.uniform(-np.pi, np.pi)
+        self.state[13] = random.uniform(-np.pi, np.pi)
+        self.state[14] = random.uniform(-np.pi, np.pi)
+
+        robotBase = self.sim.getObject('/lower_hemisphere')
+        cm_R = R.from_euler('xyz',self.state[12:15])
+        cm_quat = cm_R.as_quat()
+        self.sim.setObjectPose(robotBase, np.concatenate([np.array(self.target_pos) - self.state[9:12],cm_quat]).tolist())
+        self.sim.setObjectFloatParam(robotBase, self.sim.shapefloatparam_init_velocity_x, self.state[3])
+        self.sim.setObjectFloatParam(robotBase, self.sim.shapefloatparam_init_velocity_y, self.state[4])
+        self.sim.setObjectFloatParam(robotBase, self.sim.shapefloatparam_init_velocity_z, self.state[5])
+        self.sim.setObjectFloatParam(robotBase, self.sim.shapefloatparam_init_velocity_a, self.state[6])
+        self.sim.setObjectFloatParam(robotBase, self.sim.shapefloatparam_init_velocity_b, self.state[7])
+        self.sim.setObjectFloatParam(robotBase, self.sim.shapefloatparam_init_velocity_g, self.state[8])
+
     def step(self, action):
 
-        print(f"{self.port}:STEP START,{datetime.datetime.now()}")
         sim_time = self.sim.getSimulationTime()
 
         # set action
-        # print(f"action is {action}")
-        if sim_time < 4.9:
-            self.qbot_sim_model.setJointTargetVelocity('joint0', 0, 0)
-            self.qbot_sim_model.setJointTargetVelocity('joint1', 0, 0)
-            self.qbot_sim_model.setJointTargetVelocity('joint2', 0, 0)
+        # Rotate to target speed
+        if sim_time < 2:
+            self.qbot_sim_model.setJointTargetVelocity('joint0', 100, self.state[0])
+            self.qbot_sim_model.setJointTargetVelocity('joint1', 100, self.state[1])
+            self.qbot_sim_model.setJointTargetVelocity('joint2', 100, self.state[2])
+            cm_pose = self.qbot_sim_model.getCMPose()
+            cm_R = R.from_quat(cm_pose[3:])
+            rel_R = cm_R.inv() * self.target_R
+            self.error_angle_last = np.linalg.norm(rel_R.as_rotvec())
 
-        while sim_time < 4.9:
+
+
+        while sim_time < 2:
             self.sim.step()
             sim_time = self.sim.getSimulationTime()
 
@@ -112,15 +128,17 @@ class QBotEnv_Jump(gym.Env):
         robotCollection = self.sim.createCollection(0)
         self.sim.addItemToCollection(robotCollection, self.sim.handle_tree, robotBase, 0)
         floor = self.sim.getObject('/Floor')
-        result, dist, coll = self.sim.checkDistance(robotCollection, floor, 0.05)
+        result, dist, coll = self.sim.checkDistance(robotCollection, floor, 0.005)
         done = False
-        if not self.leave_ground and result==1:
+        if result == 0:
             self.qbot_sim_model.setJointTargetVelocity('joint0', self.max_torque, action[0] * 8)
             self.qbot_sim_model.setJointTargetVelocity('joint1', self.max_torque, action[1] * 8)
             self.qbot_sim_model.setJointTargetVelocity('joint2', self.max_torque, action[2] * 8)
-            self.sim.step()
+            for i in range(self.sim_per_step):
+                self.sim.step()
         else:
-            self.leave_ground = True
+            done = True
+            self.touch_ground = True
 
 
         # Get State
@@ -139,42 +157,17 @@ class QBotEnv_Jump(gym.Env):
         rel_R = cm_R.inv() * self.target_R
         rel_eul = rel_R.as_euler('xyz')
 
-        error_now = np.linalg.norm(rel_t)
-        error_horizontal = np.linalg.norm(rel_t[0:2])
-        error_angle = np.linalg.norm(rel_eul)
+        error_angle = np.linalg.norm(rel_R.as_rotvec())
 
         #Calculate Reward
         reward = 0.0
-        if self.leave_ground:
-            result, dist, coll = self.sim.checkDistance(robotCollection, floor, 0.005)
-            while result==0:
-                for i in range(self.sim_per_step):
-                    self.sim.step()
-                sim_time = self.sim.getSimulationTime()
-
-                cm_pose = self.qbot_sim_model.getCMPose()
-                rel_t = np.array(self.target_pos) - np.array(cm_pose[0:3])
-                error_horizontal = np.linalg.norm(rel_t[0:2])
-
-                if (sim_time >= self.time_max) or (np.linalg.norm(rel_t) > 3) or ((sim_time >= 60)  and (error_horizontal > 0.95)):
-                    done = True
-                    break
-                result, dist, coll = self.sim.checkDistance(robotCollection, floor, 0.005)
-            if done:
-                reward = -100.0
-            else:
-                done = True
-                reward = 10000.0 * math.exp(-5 * error_horizontal)
+        if self.touch_ground:
+            reward = 10000.0 * math.exp(-20*error_angle)
         else:
-            #Accelaration Penalty
-            acc = cm_v - self.cm_v_last
-            acc_h = acc[0:2]
-            acc_hnorm = acc_h / np.linalg.norm(acc_h)
-            rel_t_hnorm = rel_t[0:2] / np.linalg.norm(rel_t[0:2])
+            #Attitude Penalty
+            reward = 50 * (self.error_angle_last - error_angle)
 
-            reward = 10000 * np.dot(acc_h, rel_t_hnorm) - abs(np.arccos(np.dot(acc_hnorm, rel_t_hnorm)))
-            self.cm_v_last = cm_v
-
+            self.error_angle_last = error_angle
             # energy penalty
             energy = 0
             for i in range(3):
@@ -183,41 +176,26 @@ class QBotEnv_Jump(gym.Env):
                 else:
                     energy += 0.5 * 6e-4 * abs(v[i] ** 2 + self.v_last[i] ** 2)
             reward -= energy
-
             self.v_last = v
 
-
-        self.state = np.concatenate([v, cm_v, cm_w, rel_t, rel_eul, np.array([sim_time])])
+        self.state = np.concatenate([v, cm_v, cm_w, rel_t, rel_eul])
 
         # print(f"{sim_time}:{reward},{action}")
-        print(f"{self.port}:STEP END,{datetime.datetime.now()}")
         return self.state.astype(np.float32), reward, done, False, {}
     
     def reset(self, seed=None):
         # print('Reset the environment after {} counts'.format(self.counts))
-        self.counts = 0
-        self.push_force = 0
-        self.error_last_min = 10000
-        self.error_last_max = 0
-        self.error_last = 1.149
         # self.state = self.np_random.uniform(low=-0.05, high=0.05, size=(16,))
-        self.state = np.zeros((16,))
-        self.state[10] = self.target_pos[1]
-        self.v_last = np.array([0.0, 0.0, 0.0])
-        self.cm_v_last = np.array([0.0, 0.0, 0.0])
-        self.steps_beyond_done = None
-        self.leave_ground = False
 
-        theta = random.uniform(-np.pi, np.pi)
-        self.target_pos = [np.sin(theta), np.cos(theta),0.64]
+        self.touch_ground = False
+        self.v_last = np.array([0.0, 0.0, 0.0])
+        self.error_angle_last = 100
 
         self.sim.stopSimulation() # stop the simulation
         time.sleep(1) # ensure the coppeliasim is stopped
         self.sim.setStepping(True)
 
-        robotBase = self.sim.getObject('/target')
-        self.sim.setObjectPose(robotBase, self.target_pos + [0,0,0,1])
-
+        self.setSimInit()
         self.sim.startSimulation()
         return np.array(self.state, dtype=np.float32), {}
     

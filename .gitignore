@@ -1,5 +1,5 @@
 *__pycache__
 *.pyc
-LIPM/saved_models/tmp/*
 .vscode
 .idea
+QBot/saved_models/tmp/*
